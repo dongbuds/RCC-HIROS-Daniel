@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAnyPermission } from "@/lib/auth-token";
 import { db } from "@/lib/db";
-
-const KIOSK_SERVICE_URL =
-  process.env.NEXT_PUBLIC_KIOSK_SERVICE_URL || "http://127.0.0.1:8765";
+import { KIOSK_SERVICE_URL } from "@/lib/kiosk";
 
 // ═══════════════════════════════════════════════════════════════
 // POST /api/biometric/zk/enroll  — biometric.enroll | canManageBiometrics

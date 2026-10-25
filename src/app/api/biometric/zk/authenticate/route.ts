@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-
-const KIOSK_SERVICE_URL =
-  process.env.NEXT_PUBLIC_KIOSK_SERVICE_URL || "http://127.0.0.1:8765";
+import { KIOSK_SERVICE_URL } from "@/lib/kiosk";
 
 // Rate limit: one request per employeeId per 5 seconds (like kiosk/clock)
 const lastRequest = new Map<string, number>();

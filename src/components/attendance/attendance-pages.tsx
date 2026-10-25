@@ -15,6 +15,10 @@ import {
 } from "@/components/shared/table-pagination-v2";
 import { Switch } from "@/components/ui/switch";
 
+// Browser-side address of the loopback ZK bridge (runs on the kiosk PC).
+const KIOSK_SERVICE_URL =
+  process.env.NEXT_PUBLIC_KIOSK_SERVICE_URL || "http://127.0.0.1:8765";
+
 // ═══════════════════════════════════════════════════════════════
 // Types
 // ═══════════════════════════════════════════════════════════════
@@ -730,7 +734,7 @@ export function AttendanceConfigurationPage() {
     setError(null);
     setKioskStatus("checking");
     try {
-      const response = await fetch("http://127.0.0.1:8765/health", {
+      const response = await fetch(`${KIOSK_SERVICE_URL}/health`, {
         method: "GET",
         headers: { "Content-Type": "application/json" },
         signal: AbortSignal.timeout(5000),

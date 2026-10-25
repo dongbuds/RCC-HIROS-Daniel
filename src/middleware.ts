@@ -12,9 +12,14 @@ export const PUBLIC_PATHS = ["/login", "/api/auth/login"];
 
 export function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
+  const host = request.headers.get("host") ?? "";
+  const isLoopback = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host);
 
   // ── 1. HTTPS redirect (production only) ──
-  if (process.env.NODE_ENV === "production") {
+  // Skipped for loopback so container health checks and local smoke tests
+  // against http://127.0.0.1:3000 keep working. Public traffic arrives through
+  // Cloudflare with x-forwarded-proto: https.
+  if (process.env.NODE_ENV === "production" && !isLoopback) {
     const proto = request.headers.get("x-forwarded-proto");
     if (proto && proto !== "https") {
       return NextResponse.redirect(

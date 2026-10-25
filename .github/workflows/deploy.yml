@@ -1,0 +1,182 @@
+name: CI/CD
+
+# CI : every push and pull request — install, generate, typecheck, lint, build
+# CD : push to main only — build images, push to GHCR, deploy on the host
+#
+# The deploy job runs on a self-hosted runner on the machine that hosts the
+# stack (label `rcc-hiros-daniel`). No inbound ports are opened: the runner
+# polls GitHub, and Cloudflare Tunnel carries public traffic.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  # ── Normalises the image name (GHCR rejects uppercase owners) ──
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.vars.outputs.image }}
+      tag: ${{ steps.vars.outputs.tag }}
+    steps:
+      - id: vars
+        run: |
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+  # ── CI ──
+  ci:
+    name: Install, typecheck, lint, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Placeholders only: `prisma generate` and `next build` import these.
+      # No database is contacted and no secret is baked into the bundle.
+      DATABASE_URL: mysql://ci:ci@127.0.0.1:3306/rcc_hiros
+      JWT_SECRET: ci-placeholder-not-a-real-secret
+      NEXT_PUBLIC_KIOSK_SERVICE_URL: http://127.0.0.1:8765
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+  # ── Image build & push ──
+  docker:
+    name: Build ${{ matrix.target }} image
+    needs: [prepare, ci]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        target: [runner, migrate]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve tags
+        id: tags
+        run: |
+          if [ "${{ matrix.target }}" = "runner" ]; then
+            echo "tags=${{ needs.prepare.outputs.image }}:latest,${{ needs.prepare.outputs.image }}:${{ needs.prepare.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${{ needs.prepare.outputs.image }}:migrate" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            NEXT_PUBLIC_KIOSK_SERVICE_URL=${{ vars.NEXT_PUBLIC_KIOSK_SERVICE_URL || 'http://127.0.0.1:8765' }}
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+
+  # ── CD ──
+  deploy:
+    name: Deploy to host
+    needs: [prepare, docker]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, rcc-hiros-daniel]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    env:
+      APP_IMAGE: ${{ needs.prepare.outputs.image }}:${{ needs.prepare.outputs.tag }}
+      MIGRATE_IMAGE: ${{ needs.prepare.outputs.image }}:migrate
+      PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://hiros.dpdns.org' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore host environment file
+        run: cp "$HOME/rcc-hiros-daniel-deploy/.env.production" .env.production
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Pull images
+        run: |
+          docker compose --env-file .env.production --profile tools pull migrate
+          docker compose --env-file .env.production pull app
+
+      - name: Apply database migrations
+        run: docker compose --env-file .env.production --profile tools run --rm migrate
+
+      - name: Start application
+        run: docker compose --env-file .env.production up -d --remove-orphans app
+
+      - name: Smoke test
+        run: |
+          for attempt in $(seq 1 20); do
+            if curl -fsS "$PUBLIC_URL/api/health" > /dev/null; then
+              echo "Health check passed at $PUBLIC_URL"
+              exit 0
+            fi
+            echo "Attempt $attempt failed, retrying in 3s..."
+            sleep 3
+          done
+          echo "Health check failed — recent app logs:"
+          docker compose --env-file .env.production logs --tail=80 app
+          exit 1
+
+      # Every later `docker compose` run on the host must resolve the same
+      # image the pipeline deployed, otherwise compose falls back to :latest.
+      - name: Pin deployed image in host environment
+        run: |
+          sed -i '/^APP_IMAGE=/d;/^MIGRATE_IMAGE=/d' .env.production
+          printf '\n# Pinned by the deploy job (%s)\nAPP_IMAGE=%s\nMIGRATE_IMAGE=%s\n' \
+            "$GITHUB_SHA" "$APP_IMAGE" "$MIGRATE_IMAGE" >> .env.production
+          cp .env.production "$HOME/rcc-hiros-daniel-deploy/.env.production"
+
+      - name: Prune dangling images
+        run: docker image prune -f

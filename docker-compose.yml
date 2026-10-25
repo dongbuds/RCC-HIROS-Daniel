@@ -1,0 +1,104 @@
+name: rcc-hiros-daniel
+
+# ═══════════════════════════════════════════════════════════════
+# RCC-HIROS — single-host production stack (Daniel's deployment)
+#
+#   app         Next.js standalone server (built in CI, pulled from GHCR)
+#   db          MariaDB 11 with a named volume
+#   migrate     one-shot prisma migrate deploy / seed (profile: tools)
+#   cloudflared named Cloudflare Tunnel (profile: tunnel)
+#   tunnel-quick throwaway trycloudflare URL (profile: quick)
+#
+# This stack co-exists with another RCC-HIROS deployment on the same
+# Docker daemon, so every name and port is deliberately distinct:
+#   project rcc-hiros-daniel · app 3001 · db 3308 · own volumes.
+#
+# Usage:
+#   docker compose --env-file .env.production up -d app
+#   docker compose --env-file .env.production --profile tools run --rm migrate
+#   docker compose --env-file .env.production --profile tunnel up -d cloudflared
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  app:
+    image: ${APP_IMAGE:-ghcr.io/dongbuds/rcc-hiros-daniel:latest}
+    build:
+      context: .
+      target: runner
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      TZ: ${TZ:-Asia/Manila}
+      # In Docker the ZK bridge listens on the Windows host, not the container.
+      KIOSK_SERVICE_URL: ${KIOSK_SERVICE_URL:-http://host.docker.internal:8765}
+    ports:
+      # Loopback only: the tunnel reaches the app over the compose network,
+      # so nothing needs to be exposed on the LAN. 3001 avoids the other
+      # stack's 3000.
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - uploads-data:/app/uploads
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: mariadb:11.4
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    env_file:
+      - .env.production
+    environment:
+      TZ: ${TZ:-Asia/Manila}
+    ports:
+      # 3308 on the host; the other stack owns 3307 and XAMPP owns 3306.
+      - "127.0.0.1:3308:3306"
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  migrate:
+    image: ${MIGRATE_IMAGE:-ghcr.io/dongbuds/rcc-hiros-daniel:migrate}
+    build:
+      context: .
+      target: migrate
+    profiles: ["tools"]
+    env_file:
+      - .env.production
+    environment:
+      TZ: ${TZ:-Asia/Manila}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    # No depends_on: the connector must be able to start before the first
+    # image exists, so the pipeline's post-deploy smoke test can reach the URL.
+    restart: unless-stopped
+
+  tunnel-quick:
+    image: cloudflare/cloudflared:latest
+    profiles: ["quick"]
+    command: tunnel --no-autoupdate --url http://app:3000
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  uploads-data:
