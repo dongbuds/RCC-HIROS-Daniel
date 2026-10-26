@@ -6,7 +6,7 @@ school-controlled machine behind a Cloudflare Tunnel.
 
 - **Repository:** https://github.com/dongbuds/RCC-HIROS-Daniel
 - **CI/CD:** [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
-- **Public URL:** https://hiros.dpdns.org
+- **Public URL:** https://smell-employee-castle-glow.trycloudflare.com
 - **Container images:** `ghcr.io/dongbuds/rcc-hiros-daniel` (`:latest`, `:<sha>`, `:migrate`)
 
 `hiros.dpdns.org` is a free subdomain from DigitalPlat's `dpdns.org` namespace,
@@ -157,7 +157,7 @@ push / PR ──► ci ───────────────────
 | `MARIADB_*` | db container | — | First-boot initialisation only. `MARIADB_PASSWORD` must match `DATABASE_URL`. |
 | `CLOUDFLARE_TUNNEL_TOKEN` | tunnel container | `eyJ...` | Minted when the tunnel is created. |
 | `APP_IMAGE` / `MIGRATE_IMAGE` | compose | `ghcr.io/dongbuds/rcc-hiros-daniel:<sha>` | Pinned by the deploy job; edit to roll back. |
-| `PUBLIC_URL` | GitHub variable | `https://hiros.dpdns.org` | Used by the post-deploy smoke test. |
+| `PUBLIC_URL` | GitHub variable | `https://smell-employee-castle-glow.trycloudflare.com` | Used by the post-deploy smoke test. |
 
 The host copy lives at `~/rcc-hiros-daniel-deploy/.env.production` and is never
 committed. `.env.production` is gitignored, and `.dockerignore` keeps `.env*`
