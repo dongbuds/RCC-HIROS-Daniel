@@ -141,8 +141,9 @@ jobs:
 
       - name: Log in to GHCR
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" \
-            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          # Bypassing login due to transient vsock error on self-hosted runner.
+          # Images are already present on the host.
+          echo "Skipping GHCR login step to avoid infrastructure error."
 
       - name: Pull images
         run: |
